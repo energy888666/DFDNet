@@ -18,72 +18,64 @@ from data.image_folder import make_dataset
 import sys
 sys.path.append('FaceLandmarkDetection')
 import face_alignment
-
-###########################################################################
-################# functions of crop and align face images #################
-###########################################################################
-def get_5_points(img):
-    dets = detector(img, 1)
-    if len(dets) == 0:
-        return None
-    areas = []
-    if len(dets) > 1:
-        print('\t###### Warning: more than one face is detected. In this version, we only handle the largest one.')
-    for i in range(len(dets)):
-        area = (dets[i].rect.right()-dets[i].rect.left())*(dets[i].rect.bottom()-dets[i].rect.top())
-        areas.append(area)
-    ins = areas.index(max(areas))
-    shape = sp(img, dets[ins].rect) 
-    single_points = []
-    for i in range(5):
-        single_points.append([shape.part(i).x, shape.part(i).y])
-    return np.array(single_points) 
-
 def align_and_save(img_path, save_path, save_input_path, save_param_path, upsample_scale=2):
     out_size = (512, 512) 
     img = dlib.load_rgb_image(img_path)
     h,w,_ = img.shape
     source = get_5_points(img) 
-    if source is None: #
+    if len(source)==0: #
         print('\t################ No face is detected')
         return
-    tform = trans.SimilarityTransform()                                                                                                                                                  
-    tform.estimate(source, reference)
-    M = tform.params[0:2,:]
-    crop_img = cv2.warpAffine(img, M, out_size)
-    io.imsave(save_path, crop_img) #save the crop and align face
-    io.imsave(save_input_path, img) #save the whole input image
-    tform2 = trans.SimilarityTransform()  
-    tform2.estimate(reference, source*upsample_scale)
-    # inv_M = cv2.invertAffineTransform(M)
-    np.savetxt(save_param_path, tform2.params[0:2,:],fmt='%.3f') #save the inverse affine parameters
-    
-def reverse_align(input_path, face_path, param_path, save_path, upsample_scale=2):
-    out_size = (512, 512) 
-    input_img = dlib.load_rgb_image(input_path)
-    h,w,_ = input_img.shape
-    face512 = dlib.load_rgb_image(face_path)
-    inv_M = np.loadtxt(param_path)
-    inv_crop_img = cv2.warpAffine(face512, inv_M, (w*upsample_scale,h*upsample_scale))
-    mask = np.ones((512, 512, 3), dtype=np.float32) #* 255
-    inv_mask = cv2.warpAffine(mask, inv_M, (w*upsample_scale,h*upsample_scale))
-    upsample_img = cv2.resize(input_img, (w*upsample_scale, h*upsample_scale))
-    inv_mask_erosion_removeborder = cv2.erode(inv_mask, np.ones((2 * upsample_scale, 2 * upsample_scale), np.uint8))# to remove the black border
-    inv_crop_img_removeborder = inv_mask_erosion_removeborder * inv_crop_img
-    total_face_area = np.sum(inv_mask_erosion_removeborder)//3
-    w_edge = int(total_face_area ** 0.5) // 20 #compute the fusion edge based on the area of face
-    erosion_radius = w_edge * 2
-    inv_mask_center = cv2.erode(inv_mask_erosion_removeborder, np.ones((erosion_radius, erosion_radius), np.uint8))
-    blur_size = w_edge * 2
-    inv_soft_mask = cv2.GaussianBlur(inv_mask_center,(blur_size + 1, blur_size + 1),0)
-    merge_img = inv_soft_mask * inv_crop_img_removeborder + (1 - inv_soft_mask) * upsample_img
-    io.imsave(save_path, merge_img.astype(np.uint8))
+    for i in range(len(source)):
+        v=source[i]
+        tform = trans.SimilarityTransform()                                                                                                                                                  
+        tform.estimate(v, reference)
+        M = tform.params[0:2,:]
+        crop_img = cv2.warpAffine(img, M, out_size)
+        io.imsave(save_path+str(i)+'.jpg', crop_img) #save the crop and align face
+        io.imsave(save_input_path, img) #save the whole input image
+        tform2 = trans.SimilarityTransform()  
+        tform2.estimate(reference, v*upsample_scale)
+        # inv_M = cv2.invertAffineTransform(M)
+        np.savetxt(save_param_path+str(i)+'.npy', tform2.params[0:2,:],fmt='%.3f') #save the inverse affine parameters
+
+def get_5_points(img):
+    dets = detector(img, 1)
+    if len(dets) == 0:
+        return None
+    result=[]
+    for v in dets:
+        areas = []
+        for i in range(len(dets)):
+            area = (dets[i].rect.right()-dets[i].rect.left())*(dets[i].rect.bottom()-dets[i].rect.top())
+            areas.append(area)
+        #v 第几个头像
+        shape = sp(img, v.rect) 
+        single_points = []
+        for i in range(5):
+            single_points.append([shape.part(i).x, shape.part(i).y])
+        result.append(np.array(single_points))
+    return result
+
+def obtain_inputs(img_path, Landmark_path, img_name):
+    A_paths = os.path.join(img_path,img_name)
+    A = Image.open(A_paths).convert('RGB')
+    Part_locations = get_part_location(Landmark_path, img_name)
+    if Part_locations == 0:
+        return 0
+    C = A
+    A = AddUpSample(A)
+    A = transforms.ToTensor()(A) 
+    C = transforms.ToTensor()(C)
+    A = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))(A) #
+    C = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))(C) #
+    return {'A':A.unsqueeze(0), 'C':C.unsqueeze(0), 'A_paths': A_paths,'Part_locations': Part_locations}
 
 ###########################################################################
-################ functions of preparing the test images ###################
+################ functions of preparing the test images 准备测试图像的功能###################
 ###########################################################################
 def AddUpSample(img):
-    return img.resize((512, 512), Image.BICUBIC)
+    return img.resize((512, 512), Image.BICUBIC)    
 def get_part_location(partpath, imgname):
     Landmarks = []
     if not os.path.exists(os.path.join(partpath,imgname+'.txt')):
@@ -120,74 +112,9 @@ def get_part_location(partpath, imgname):
         return 0
     return torch.from_numpy(Location_LE).unsqueeze(0), torch.from_numpy(Location_RE).unsqueeze(0), torch.from_numpy(Location_NO).unsqueeze(0), torch.from_numpy(Location_MO).unsqueeze(0)
 
-def obtain_inputs(img_path, Landmark_path, img_name):
-    A_paths = os.path.join(img_path,img_name)
-    A = Image.open(A_paths).convert('RGB')
-    Part_locations = get_part_location(Landmark_path, img_name)
-    if Part_locations == 0:
-        return 0
-    C = A
-    A = AddUpSample(A)
-    A = transforms.ToTensor()(A) 
-    C = transforms.ToTensor()(C)
-    A = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))(A) #
-    C = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))(C) #
-    return {'A':A.unsqueeze(0), 'C':C.unsqueeze(0), 'A_paths': A_paths,'Part_locations': Part_locations}
-    
-if __name__ == '__main__':
-    opt = TestOptions().parse()
-    opt.nThreads = 1   # test code only supports nThreads = 1
-    opt.batchSize = 1  # test code only supports batchSize = 1
-    opt.serial_batches = True  # no shuffle
-    opt.no_flip = True  # no flip
-    opt.display_id = -1  # no visdom display
-    opt.which_epoch = 'latest' #
-
+def no2():
     #######################################################################
-    ########################### Test Param ################################
-    #######################################################################
-    # opt.gpu_ids = [0] # gpu id. if use cpu, set opt.gpu_ids = []
-    # TestImgPath = './TestData/TestWhole' # test image path
-    # ResultsDir = './Results/TestWholeResults' #save path 
-    # UpScaleWhole = 4  # the upsamle scale. It should be noted that our face results are fixed to 512.
-    TestImgPath = opt.test_path
-    ResultsDir = opt.results_dir
-    UpScaleWhole = opt.upscale_factor
-
-    print('\n###################### Now Running the X {} task ##############################'.format(UpScaleWhole))
-
-    #######################################################################
-    ###########Step 1: Crop and Align Face from the whole Image ###########
-    #######################################################################
-    print('\n###############################################################################')
-    print('####################### Step 1: Crop and Align Face ###########################')
-    print('###############################################################################\n')
-    
-    detector = dlib.cnn_face_detection_model_v1('./packages/mmod_human_face_detector.dat')
-    sp = dlib.shape_predictor('./packages/shape_predictor_5_face_landmarks.dat')
-    reference = np.load('./packages/FFHQ_template.npy') / 2
-    SaveInputPath = os.path.join(ResultsDir,'Step0_Input')
-    if not os.path.exists(SaveInputPath):
-        os.makedirs(SaveInputPath)
-    SaveCropPath = os.path.join(ResultsDir,'Step1_CropImg')
-    if not os.path.exists(SaveCropPath):
-        os.makedirs(SaveCropPath)
-
-    SaveParamPath = os.path.join(ResultsDir,'Step1_AffineParam') #save the inverse affine parameters
-    if not os.path.exists(SaveParamPath):
-        os.makedirs(SaveParamPath)
-
-    ImgPaths = make_dataset(TestImgPath)
-    for i, ImgPath in enumerate(ImgPaths):
-        ImgName = os.path.split(ImgPath)[-1]
-        print('Crop and Align {} image'.format(ImgName))
-        SavePath = os.path.join(SaveCropPath,ImgName)
-        SaveInput = os.path.join(SaveInputPath,ImgName)
-        SaveParam = os.path.join(SaveParamPath, ImgName+'.npy')
-        align_and_save(ImgPath, SavePath, SaveInput, SaveParam, UpScaleWhole)
-
-    #######################################################################
-    ####### Step 2: Face Landmark Detection from the Cropped Image ########
+    ####### Step 2: Face Landmark Detection from the Cropped Image从裁剪图像中检测人脸地标 ########
     #######################################################################
     print('\n###############################################################################')
     print('####################### Step 2: Face Landmark Detection #######################')
@@ -227,10 +154,11 @@ if __name__ == '__main__':
         SaveName = ImgName+'.txt'
         np.savetxt(os.path.join(SaveLandmarkPath,SaveName),preds[:,0:2],fmt='%.3f')
 
+def no3():        
     #######################################################################
     ####################### Step 3: Face Restoration ######################
     #######################################################################
-
+    global SaveLandmarkPath
     print('\n###############################################################################')
     print('####################### Step 3: Face Restoration ##############################')
     print('###############################################################################\n')
@@ -246,7 +174,6 @@ if __name__ == '__main__':
     for i, ImgPath in enumerate(ImgPaths):
         ImgName = os.path.split(ImgPath)[-1]
         print('Restoring {}'.format(ImgName))
-        torch.cuda.empty_cache()
         data = obtain_inputs(SaveCropPath, SaveLandmarkPath, ImgName)
         if data == 0:
             print('\t################ Error in landmark file, continue...')
@@ -260,12 +187,13 @@ if __name__ == '__main__':
         except Exception as e:
             print('\t################ Error in enhancing this image: {}'.format(str(e)))
             print('\t################ continue...')
-            continue
-
+            continue        
+   
+def no4():
     #######################################################################
     ############ Step 4: Paste the Results to the Input Image #############
     #######################################################################
-    
+    global SaveRestorePath, TestImgPath
     print('\n###############################################################################')
     print('############### Step 4: Paste the Restored Face to the Input Image ############')
     print('###############################################################################\n')
@@ -273,15 +201,107 @@ if __name__ == '__main__':
     SaveFianlPath = os.path.join(ResultsDir,'Step4_FinalResults')
     if not os.path.exists(SaveFianlPath):
         os.makedirs(SaveFianlPath)
+    TestImgPaths = make_dataset(TestImgPath)
     ImgPaths = make_dataset(SaveRestorePath)
-    for i,ImgPath in enumerate(ImgPaths):
+    for T_i,T_ImgPath in enumerate(TestImgPaths):
+      T_ImgName = os.path.split(T_ImgPath)[-1]
+      WholeInputPath = os.path.join(TestImgPath,T_ImgName)
+      input_img = dlib.load_rgb_image(WholeInputPath)
+      h,w,_ = input_img.shape
+      upsample_scale=UpScaleWhole
+      upsample_img = cv2.resize(input_img, (w*upsample_scale, h*upsample_scale))
+      for i,ImgPath in enumerate(ImgPaths):
+        if ImgPath.find('\\'+T_ImgName)<0:
+            continue
         ImgName = os.path.split(ImgPath)[-1]
         print('Final Restoring {}'.format(ImgName))
-        WholeInputPath = os.path.join(TestImgPath,ImgName)
         FaceResultPath = os.path.join(SaveRestorePath, ImgName)
-        ParamPath = os.path.join(SaveParamPath, ImgName+'.npy')
-        SaveWholePath = os.path.join(SaveFianlPath, ImgName)
-        reverse_align(WholeInputPath, FaceResultPath, ParamPath, SaveWholePath, UpScaleWhole)
+        ParamPath = os.path.join(SaveParamPath, ImgName[:-4]+'.npy')
+        SaveWholePath = os.path.join(SaveFianlPath, T_ImgName)
 
+        face_path=FaceResultPath
+        param_path=ParamPath
+        save_path=SaveWholePath
+        face512 = dlib.load_rgb_image(face_path)
+        inv_M = np.loadtxt(param_path)
+        inv_crop_img = cv2.warpAffine(face512, inv_M, (w*upsample_scale,h*upsample_scale))
+        mask = np.ones((512, 512, 3), dtype=np.float32) #* 255
+        inv_mask = cv2.warpAffine(mask, inv_M, (w*upsample_scale,h*upsample_scale))
+        inv_mask_erosion_removeborder = cv2.erode(inv_mask, np.ones((2 * upsample_scale, 2 * upsample_scale), np.uint8))# to remove the black border
+        inv_crop_img_removeborder = inv_mask_erosion_removeborder * inv_crop_img
+        total_face_area = np.sum(inv_mask_erosion_removeborder)//3
+        w_edge = int(total_face_area ** 0.5) // 20 #compute the fusion edge based on the area of face
+        erosion_radius = w_edge * 2
+        inv_mask_center = cv2.erode(inv_mask_erosion_removeborder, np.ones((erosion_radius, erosion_radius), np.uint8))
+        blur_size = w_edge * 2
+        inv_soft_mask = cv2.GaussianBlur(inv_mask_center,(blur_size + 1, blur_size + 1),0)
+        upsample_img = inv_soft_mask * inv_crop_img_removeborder + (1 - inv_soft_mask) * upsample_img
+      io.imsave(save_path, upsample_img.astype(np.uint8))        
     print('\nAll results are saved in {} \n'.format(ResultsDir))
+
+
+if __name__ == '__main__':
+    opt = TestOptions().parse()
+    opt.nThreads = 1   # test code only supports nThreads = 1
+    opt.batchSize = 1  # test code only supports batchSize = 1
+    opt.serial_batches = True  # no shuffle
+    opt.no_flip = True  # no flip
+    opt.display_id = -1  # no visdom display
+    opt.which_epoch = 'latest' #
+
+    #######################################################################
+    ########################### Test Param ################################
+    #######################################################################
+    # opt.gpu_ids = [0] # gpu id. if use cpu, set opt.gpu_ids = []
+    # TestImgPath = './TestData/TestWhole' # test image path
+    # ResultsDir = './Results/TestWholeResults' #save path 
+    # UpScaleWhole = 4  # the upsamle scale. It should be noted that our face results are fixed to 512.
+    TestImgPath = opt.test_path
+    ResultsDir = opt.results_dir
+    UpScaleWhole = opt.upscale_factor
+
+    print('\n###################### Now Running the X {} task ##############################'.format(UpScaleWhole))
+    
+    #######################################################################
+    ###########Step 1: Crop and Align Face from the whole Image从整个图像中裁剪和对齐脸部 ###########
+    #######################################################################
+    print('\n###############################################################################')
+    print('####################### Step 1: Crop and Align Face ###########################')
+    print('###############################################################################\n')
+    
+    detector = dlib.cnn_face_detection_model_v1('./packages/mmod_human_face_detector.dat')
+    sp = dlib.shape_predictor('./packages/shape_predictor_5_face_landmarks.dat')
+    reference = np.load('./packages/FFHQ_template.npy') / 2
+    SaveInputPath = os.path.join(ResultsDir,'Step0_Input')
+    if not os.path.exists(SaveInputPath):
+        os.makedirs(SaveInputPath)
+    SaveCropPath = os.path.join(ResultsDir,'Step1_CropImg')
+    if not os.path.exists(SaveCropPath):
+        os.makedirs(SaveCropPath)
+
+    SaveParamPath = os.path.join(ResultsDir,'Step1_AffineParam') #save the inverse affine parameters
+    if not os.path.exists(SaveParamPath):
+        os.makedirs(SaveParamPath)
+
+    ImgPaths = make_dataset(TestImgPath)
+    for i, ImgPath in enumerate(ImgPaths):
+        ImgName = os.path.split(ImgPath)[-1]
+        print('Crop and Align {} image'.format(ImgName))
+        SavePath = os.path.join(SaveCropPath,ImgName)
+        SaveInput = os.path.join(SaveInputPath,ImgName)
+        SaveParam = os.path.join(SaveParamPath, ImgName)
+        merge_img=cv2.imread(ImgPath)
+        (x,y) = merge_img.shape[0:2] #read image size
+        if y>800:
+            x_s = 800 #define standard width
+            y_s = y * x_s / x #calc height based on standard width
+            out = cv2.resize(merge_img,(int(y_s), x_s))
+            cv2.imwrite(ImgPath, out)
+        align_and_save(ImgPath, SavePath, SaveInput, SaveParam, UpScaleWhole)
+    
+    SaveRestorePath = os.path.join(ResultsDir,'Step3_RestoreCropFace')# Only Face Results
+    SaveLandmarkPath = os.path.join(ResultsDir,'Step2_Landmarks')
+    no2()
+    no3()
+    no4()
     
